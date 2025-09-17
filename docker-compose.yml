@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: property_qa
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Vector Database (PostgreSQL with pgvector)
+  postgres_vector:
+    image: ankane/pgvector:latest
+    environment:
+      POSTGRES_DB: vector_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_vector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Web Scraper Service
+  web_scraper:
+    build: ./services/web_scraper
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/property_qa
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Audio Transcription Service
+  audio_transcription:
+    build: ./services/audio_transcription
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Vector Database Service
+  vector_database:
+    build: ./services/vector_database
+    ports:
+      - "8003:8003"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres_vector:5432/vector_db
+    depends_on:
+      postgres_vector:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # LLM Integration Service
+  llm_integration:
+    build: ./services/llm_integration
+    ports:
+      - "8004:8004"
+    environment:
+      - OPENAI_API_KEY=mock_key_for_development
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # RAG Service (Main Orchestrator)
+  rag_service:
+    build: ./services/rag_service
+    ports:
+      - "8005:8005"
+    environment:
+      - WEB_SCRAPER_URL=http://web_scraper:8001
+      - AUDIO_TRANSCRIPTION_URL=http://audio_transcription:8002
+      - VECTOR_DATABASE_URL=http://vector_database:8003
+      - LLM_INTEGRATION_URL=http://llm_integration:8004
+    depends_on:
+      - web_scraper
+      - audio_transcription
+      - vector_database
+      - llm_integration
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+  postgres_vector_data:
